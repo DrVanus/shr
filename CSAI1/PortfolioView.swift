@@ -414,8 +414,8 @@ extension PortfolioView {
                 .fill(
                     LinearGradient(
                         gradient: Gradient(colors: [
-                            Color.gray.opacity(0.14),
-                            Color.black.opacity(58.4)
+                            Color.gray.opacity(0.06),
+                            Color.black.opacity(14.4)
                         ]),
                         startPoint: .bottomTrailing,
                         endPoint: .topLeading
