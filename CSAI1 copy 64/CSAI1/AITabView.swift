@@ -2,47 +2,63 @@
 //  AITabView.swift
 //  CSAI1
 //
-//  Demonstrates real-time streaming from OpenAI Chat Completions API (gpt-3.5-turbo).
-//  Removed Coinbase calls entirely. This strictly queries OpenAI for streaming responses.
+//  Final version using a standard project API key with the OpenAI Assistants API.
+//  This version augments the user query with live price data (via CoinbaseService) when appropriate,
+//  and isolates the Coinbase calls so that any errors (e.g. timeouts) do not cancel the main assistant call.
+//  NOTE: Ensure your Conversation model includes a `threadId` property.
+//  Also, ensure CoinbaseService.swift is present in your project.
 //
-
 import SwiftUI
 
 struct AITabView: View {
+    // All stored conversations
     @State private var conversations: [Conversation] = []
+    // Which conversation is currently active
     @State private var activeConversationID: UUID? = nil
     
+    // Controls whether the history sheet is shown
     @State private var showHistory = false
+    
+    // The user's chat input
     @State private var chatText: String = ""
+    // Whether the AI is "thinking"
     @State private var isThinking: Bool = false
+    
+    // Whether to show or hide the prompt bar
     @State private var showPromptBar: Bool = true
     
-    // For quick prompts
+    // A list of quick prompts for the chat
     private let masterPrompts: [String] = [
         "What's the current price of BTC?",
         "Compare Ethereum and Bitcoin",
         "Show me a 24h price chart for SOL",
         "How is my portfolio performing?",
+        "What's the best time to buy crypto?",
+        "What is staking and how does it work?",
+        "Are there any new DeFi projects I should watch?",
+        "Give me the top gainers and losers today",
         "Explain yield farming",
         "Should I buy or sell right now?",
         "What are the top 10 coins by market cap?",
+        "What's the difference between a limit and market order?",
+        "Show me a price chart for RLC",
+        "What is a stablecoin?",
         "Any new NFT trends?",
+        "Compare LTC with DOGE",
         "Is my portfolio well diversified?",
         "How to minimize fees when trading?",
-        "What is a stablecoin?"
+        "What's the best exchange for altcoins?"
     ]
+    
+    // Currently displayed quick replies
     @State private var quickReplies: [String] = []
     
-    // 1) Insert your real OpenAI API key here:
-    private let openAIKey = "keygoeshere"
-
-    // 2) A “system” message that defines the AI’s persona and scope:
-    private let systemRoleContent = """
-    You are CryptoSage AI, a specialized virtual assistant focused on cryptocurrencies and blockchain technology. 
-    You provide information, insights, and educational explanations about various digital assets, market trends, 
-    protocols, and related topics. You are professional but friendly, and you do not provide direct financial advice.
+    // Your standard project API key (should start with "sk-" and be valid)
+    private let openAIKey = """
+    keygoeshere
     """
-
+    
+    // Computed: returns messages for the active conversation.
     private var currentMessages: [ChatMessage] {
         guard let activeID = activeConversationID,
               let index = conversations.firstIndex(where: { $0.id == activeID }) else {
@@ -54,57 +70,22 @@ struct AITabView: View {
     var body: some View {
         NavigationView {
             ZStack {
-                Color.black.edgesIgnoringSafeArea(.all)
+                FuturisticBackground()
+                    .ignoresSafeArea()
                 
-                ZStack(alignment: .bottom) {
-                    VStack(spacing: 0) {
-                        // Chat transcript
-                        ScrollViewReader { proxy in
-                            ScrollView {
-                                LazyVStack(spacing: 8) {
-                                    ForEach(currentMessages) { msg in
-                                        ChatBubble(message: msg).id(msg.id)
-                                    }
-                                    if isThinking {
-                                        thinkingIndicator()
-                                    }
-                                }
-                                .padding(.vertical)
-                            }
-                            .onAppear {
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                    scrollToBottom(proxy)
-                                }
-                            }
-                            .onChange(of: currentMessages.count) { _ in
-                                withAnimation { scrollToBottom(proxy) }
-                            }
-                            .onChange(of: activeConversationID) { _ in
-                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                                    withAnimation { scrollToBottom(proxy) }
-                                }
-                            }
-                        }
-                        
-                        if showPromptBar {
-                            quickReplyBar()
-                                .transition(.asymmetric(
-                                    insertion: .move(edge: .bottom).combined(with: .opacity),
-                                    removal: .move(edge: .bottom).combined(with: .opacity)
-                                ))
-                        }
-                        
-                        inputBar()
-                    }
-                }
+                chatBodyView
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // Center title
                 ToolbarItem(placement: .principal) {
                     Text(activeConversationTitle())
                         .font(.headline)
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
+                // History button on the left
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
                         showHistory.toggle()
@@ -166,11 +147,66 @@ struct AITabView: View {
     }
 }
 
-// MARK: - Subviews
+// MARK: - Subviews & Helpers
 extension AITabView {
+    private var chatBodyView: some View {
+        ZStack(alignment: .bottom) {
+            Color.clear
+            
+            VStack(spacing: 0) {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(spacing: 8) {
+                            ForEach(currentMessages) { msg in
+                                ChatBubble(message: msg)
+                                    .id(msg.id)
+                            }
+                            if isThinking {
+                                thinkingIndicator()
+                            }
+                        }
+                        .padding(.vertical)
+                    }
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                            scrollToBottom(proxy)
+                        }
+                    }
+                    .onChange(of: currentMessages.count) { _ in
+                        withAnimation { scrollToBottom(proxy) }
+                    }
+                    .onChange(of: activeConversationID) { _ in
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            withAnimation { scrollToBottom(proxy) }
+                        }
+                    }
+                }
+                
+                if showPromptBar {
+                    quickReplyBar()
+                        .transition(.asymmetric(
+                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                            removal: .move(edge: .bottom).combined(with: .opacity)
+                        ))
+                }
+                
+                inputBar()
+            }
+        }
+    }
+    
+    private func activeConversationTitle() -> String {
+        guard let activeID = activeConversationID,
+              let convo = conversations.first(where: { $0.id == activeID }) else {
+            return "AI Chat"
+        }
+        return convo.title
+    }
+    
     private func thinkingIndicator() -> some View {
         HStack {
-            ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .white))
+            ProgressView()
+                .progressViewStyle(CircularProgressViewStyle(tint: .white))
             Text("CryptoSage is thinking...")
                 .foregroundColor(.white)
                 .font(.caption)
@@ -189,9 +225,9 @@ extension AITabView {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(RoundedRectangle(cornerRadius: 15)
-                            .fill(Color.yellow.opacity(0.25)))
+                                        .fill(Color.yellow.opacity(0.25)))
                         .overlay(RoundedRectangle(cornerRadius: 15)
-                            .stroke(Color.yellow.opacity(0.4), lineWidth: 1))
+                                    .stroke(Color.yellow.opacity(0.4), lineWidth: 1))
                 }
                 Button {
                     randomizePrompts()
@@ -202,13 +238,14 @@ extension AITabView {
                         .padding(.horizontal, 14)
                         .padding(.vertical, 8)
                         .background(RoundedRectangle(cornerRadius: 15)
-                            .fill(Color.yellow.opacity(0.25)))
+                                        .fill(Color.yellow.opacity(0.25)))
                         .overlay(RoundedRectangle(cornerRadius: 15)
-                            .stroke(Color.yellow.opacity(0.4), lineWidth: 1))
+                                    .stroke(Color.yellow.opacity(0.4), lineWidth: 1))
                 }
             }
             .padding(.horizontal)
             .padding(.vertical, 6)
+            .simultaneousGesture(DragGesture(minimumDistance: 10))
         }
         .background(Color.black.opacity(0.3))
     }
@@ -252,37 +289,38 @@ extension AITabView {
         .padding(.vertical, 8)
         .background(Color.black.opacity(0.6))
     }
-}
-
-// MARK: - Logic
-extension AITabView {
-    private func activeConversationTitle() -> String {
-        guard let activeID = activeConversationID,
-              let convo = conversations.first(where: { $0.id == activeID }) else {
-            return "AI Chat"
+    
+    // MARK: - Updated Live Data Augmentation
+    // This function now uses non-throwing calls to CoinbaseService.
+    // If fetching the live price fails (e.g. due to timeout), it simply returns the original input.
+    private func maybeAugmentUserInput(_ input: String) async -> String {
+        let lower = input.lowercased()
+        if lower.contains("price") {
+            if lower.contains("btc") {
+                // Use a non-throwing fetch by using try? or simply checking the optional result
+                if let btcPrice = await CoinbaseService().fetchSpotPrice(coin: "BTC", fiat: "USD") {
+                    print("Fetched BTC price: \(btcPrice)")
+                    return input + "\n\n[Live data: Current price of BTC is \(btcPrice) USD.]"
+                } else {
+                    print("Failed to fetch BTC price, proceeding without augmentation.")
+                    return input
+                }
+            } else if lower.contains("sol") {
+                if let solPrice = await CoinbaseService().fetchSpotPrice(coin: "SOL", fiat: "USD") {
+                    print("Fetched SOL price: \(solPrice)")
+                    return input + "\n\n[Live data: Current price of SOL is \(solPrice) USD.]"
+                } else {
+                    print("Failed to fetch SOL price, proceeding without augmentation.")
+                    return input
+                }
+            }
         }
-        return convo.title
-    }
-    
-    private func handleQuickReply(_ reply: String) {
-        chatText = reply
-        sendMessage()
-    }
-    
-    private func randomizePrompts() {
-        quickReplies = Array(masterPrompts.shuffled().prefix(4))
-    }
-    
-    private func scrollToBottom(_ proxy: ScrollViewProxy) {
-        if let lastID = currentMessages.last?.id {
-            proxy.scrollTo(lastID, anchor: .bottom)
-        }
+        return input
     }
     
     private func sendMessage() {
         guard let activeID = activeConversationID,
               let index = conversations.firstIndex(where: { $0.id == activeID }) else {
-            // If no conversation is active, create a new one
             let newConvo = Conversation(title: "Untitled Chat")
             conversations.append(newConvo)
             activeConversationID = newConvo.id
@@ -297,7 +335,6 @@ extension AITabView {
         let userMsg = ChatMessage(sender: "user", text: trimmed)
         convo.messages.append(userMsg)
         
-        // If it's the first message, set the conversation title
         if convo.title == "Untitled Chat" && convo.messages.count == 1 {
             convo.title = String(trimmed.prefix(20)) + (trimmed.count > 20 ? "..." : "")
         }
@@ -310,171 +347,215 @@ extension AITabView {
         
         Task {
             do {
-                var partialReply = ""
-                
-                // Insert an empty AI message first, so we can update it with streaming text
+                // Augment input with live price data if applicable.
+                let augmentedInput = await maybeAugmentUserInput(trimmed)
+                let aiText = try await fetchAIResponse(for: augmentedInput)
+                print("Final assistant reply: \(aiText)")
                 await MainActor.run {
-                    let placeholder = ChatMessage(sender: "ai", text: "")
-                    conversations[index].messages.append(placeholder)
-                    saveConversations()
-                }
-                
-                // Stream from OpenAI
-                let stream = try await streamChatCompletion(userInput: trimmed)
-                
-                for try await token in stream {
-                    partialReply += token
-                    // Update last AI message with partial text
-                    await MainActor.run {
-                        guard let idx = conversations.firstIndex(where: { $0.id == activeID }) else { return }
-                        if let lastMsgIndex = conversations[idx].messages.lastIndex(where: { $0.sender == "ai" }) {
-                            conversations[idx].messages[lastMsgIndex].text = partialReply
-                            saveConversations()
-                        }
-                    }
-                }
-                
-                // Done streaming
-                await MainActor.run {
-                    isThinking = false
-                    saveConversations()
+                    guard let idx = self.conversations.firstIndex(where: { $0.id == self.activeConversationID }) else { return }
+                    var updatedConvo = self.conversations[idx]
+                    let aiMsg = ChatMessage(sender: "ai", text: aiText)
+                    updatedConvo.messages.append(aiMsg)
+                    self.conversations[idx] = updatedConvo
+                    self.isThinking = false
+                    self.saveConversations()
                 }
             } catch {
-                print("OpenAI streaming error: \(error.localizedDescription)")
+                print("OpenAI error: \(error.localizedDescription)")
                 await MainActor.run {
-                    guard let idx = conversations.firstIndex(where: { $0.id == activeID }) else { return }
+                    guard let idx = self.conversations.firstIndex(where: { $0.id == self.activeConversationID }) else { return }
+                    var updatedConvo = self.conversations[idx]
                     let errMsg = ChatMessage(sender: "ai", text: "AI failed: \(error.localizedDescription)", isError: true)
-                    conversations[idx].messages.append(errMsg)
-                    isThinking = false
-                    saveConversations()
+                    updatedConvo.messages.append(errMsg)
+                    self.conversations[idx] = updatedConvo
+                    self.isThinking = false
+                    self.saveConversations()
                 }
             }
         }
     }
-}
-
-// MARK: - Streaming Chat
-extension AITabView {
-    /// Streams partial tokens from OpenAI's Chat Completions (gpt-3.5-turbo).
-    private func streamChatCompletion(userInput: String) async throws -> AsyncThrowingStream<String, Error> {
-        // Build the request body
-        let requestBody: [String: Any] = [
-            "model": "gpt-3.5-turbo",
-            "stream": true,
-            "messages": [
-                ["role": "system", "content": systemRoleContent],
-                ["role": "user",   "content": userInput]
-            ]
-        ]
+    
+    /// The core Assistants API call with updated JSON decoding and increased polling.
+    private func fetchAIResponse(for userInput: String) async throws -> String {
+        let config = URLSessionConfiguration.ephemeral
+        config.waitsForConnectivity = true
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 60
+        let session = URLSession(configuration: config)
         
-        guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
+        var threadId: String
+        if let currentConvoIndex = conversations.firstIndex(where: { $0.id == activeConversationID }),
+           let existingThreadId = conversations[currentConvoIndex].threadId {
+            threadId = existingThreadId
+        } else {
+            guard let threadURL = URL(string: "https://api.openai.com/v1/threads") else {
+                throw URLError(.badURL)
+            }
+            var threadRequest = URLRequest(url: threadURL)
+            threadRequest.httpMethod = "POST"
+            threadRequest.addValue("application/json", forHTTPHeaderField: "Content-Type")
+            threadRequest.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
+            threadRequest.addValue("assistants=v2", forHTTPHeaderField: "OpenAI-Beta")
+            threadRequest.httpBody = "{}".data(using: .utf8)
+            
+            let (threadData, threadResponse) = try await session.data(for: threadRequest)
+            logResponse(threadData, threadResponse)
+            struct ThreadResponse: Codable { let id: String }
+            let threadRes = try JSONDecoder().decode(ThreadResponse.self, from: threadData)
+            threadId = threadRes.id
+            
+            if let currentConvoIndex = conversations.firstIndex(where: { $0.id == activeConversationID }) {
+                conversations[currentConvoIndex].threadId = threadId
+                saveConversations()
+            }
+        }
+        
+        // POST user message
+        guard let messageURL = URL(string: "https://api.openai.com/v1/threads/\(threadId)/messages") else {
             throw URLError(.badURL)
         }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        // Important: accept SSE streaming
-        request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-        request.setValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var messageRequest = URLRequest(url: messageURL)
+        messageRequest.httpMethod = "POST"
+        messageRequest.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        messageRequest.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
+        messageRequest.addValue("assistants=v2", forHTTPHeaderField: "OpenAI-Beta")
+        let messagePayload: [String: Any] = [
+            "role": "user",
+            "content": userInput
+        ]
+        messageRequest.httpBody = try JSONSerialization.data(withJSONObject: messagePayload)
+        let (msgData, msgResponse) = try await session.data(for: messageRequest)
+        logResponse(msgData, msgResponse)
         
-        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody, options: [])
-        
-        // Configure a URLSession with a longer timeout if needed
-        let sessionConfig = URLSessionConfiguration.default
-        sessionConfig.timeoutIntervalForRequest = 60  // Increase if your connection is slow
-        sessionConfig.timeoutIntervalForResource = 90
-        
-        let session = URLSession(configuration: sessionConfig,
-                                 delegate: StreamingDelegate(),
-                                 delegateQueue: nil)
-        
-        // We'll create an AsyncThrowingStream that yields partial tokens as they arrive:
-        return AsyncThrowingStream<String, Error> { continuation in
-            // We'll build a "completion handler" style task, but parse data in the delegate
-            let streamingTask = session.dataTask(with: request)
-            
-            // Provide a callback in the delegate so it can yield tokens:
-            (session.delegate as? StreamingDelegate)?.onToken = { token in
-                continuation.yield(token)
-            }
-            (session.delegate as? StreamingDelegate)?.onFinished = { maybeError in
-                if let e = maybeError {
-                    continuation.finish(throwing: e)
-                } else {
-                    continuation.finish()
-                }
-            }
-            
-            streamingTask.resume()
+        // POST run assistant
+        guard let runURL = URL(string: "https://api.openai.com/v1/threads/\(threadId)/runs") else {
+            throw URLError(.badURL)
         }
-    }
-}
-
-/// A URLSession delegate that parses chunked SSE data from OpenAI and yields partial text tokens.
-class StreamingDelegate: NSObject, URLSessionDataDelegate {
-    /// Callback for each token chunk
-    var onToken: ((String) -> Void)?
-    /// Callback when streaming is finished or fails
-    var onFinished: ((Error?) -> Void)?
-    
-    func urlSession(_ session: URLSession,
-                    dataTask: URLSessionDataTask,
-                    didReceive data: Data) {
+        var runRequest = URLRequest(url: runURL)
+        runRequest.httpMethod = "POST"
+        runRequest.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        runRequest.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
+        runRequest.addValue("assistants=v2", forHTTPHeaderField: "OpenAI-Beta")
+        let runPayload: [String: Any] = [
+            "assistant_id": "asst_YlcZqIfjPmhCl44bUO77SYaJ"
+        ]
+        runRequest.httpBody = try JSONSerialization.data(withJSONObject: runPayload)
+        let (runData, runResponseVal) = try await session.data(for: runRequest)
+        logResponse(runData, runResponseVal)
         
-        guard let chunk = String(data: data, encoding: .utf8) else { return }
-        // The SSE data typically has lines beginning with "data: "
-        let lines = chunk.components(separatedBy: .newlines)
+        struct RunResponse: Codable { let id: String }
+        let runRes = try JSONDecoder().decode(RunResponse.self, from: runData)
+        let runId = runRes.id
         
-        for line in lines {
-            if line.hasPrefix("data: ") {
-                let jsonString = line.replacingOccurrences(of: "data: ", with: "")
-                if jsonString == "[DONE]" {
-                    // End of stream
-                    onFinished?(nil)
-                    return
-                }
-                // Attempt to parse JSON
-                if let jsonData = jsonString.data(using: .utf8) {
+        // Poll for run completion – up to 30 iterations (15 seconds total)
+        var assistantReply: String? = nil
+        for _ in 1...30 {
+            try await Task.sleep(nanoseconds: 500_000_000)
+            guard let statusURL = URL(string: "https://api.openai.com/v1/threads/\(threadId)/runs/\(runId)") else {
+                throw URLError(.badURL)
+            }
+            var statusRequest = URLRequest(url: statusURL)
+            statusRequest.httpMethod = "GET"
+            statusRequest.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
+            statusRequest.addValue("assistants=v2", forHTTPHeaderField: "OpenAI-Beta")
+            do {
+                let (statusData, statusResp) = try await session.data(for: statusRequest)
+                logResponse(statusData, statusResp)
+                
+                struct RunStatus: Codable { let status: String }
+                let statusRes = try JSONDecoder().decode(RunStatus.self, from: statusData)
+                if statusRes.status.lowercased() == "succeeded" || statusRes.status.lowercased() == "completed" {
+                    // Fetch messages
+                    guard let msgsURL = URL(string: "https://api.openai.com/v1/threads/\(threadId)/messages") else {
+                        throw URLError(.badURL)
+                    }
+                    var msgsRequest = URLRequest(url: msgsURL)
+                    msgsRequest.httpMethod = "GET"
+                    msgsRequest.addValue("Bearer \(openAIKey)", forHTTPHeaderField: "Authorization")
+                    msgsRequest.addValue("assistants=v2", forHTTPHeaderField: "OpenAI-Beta")
                     do {
-                        let response = try JSONDecoder().decode(StreamingChunk.self, from: jsonData)
-                        // Each chunk has an array of choices; each choice has a 'delta' with optional 'content'
-                        if let content = response.choices.first?.delta.content {
-                            onToken?(content)
+                        let (msgsData, msgsResp) = try await session.data(for: msgsRequest)
+                        logResponse(msgsData, msgsResp)
+                        
+                        struct ThreadMessagesResponse: Codable {
+                            let object: String
+                            let data: [AssistantMessage]
+                            let first_id: String?
+                            let last_id: String?
+                            let has_more: Bool?
+                        }
+                        struct AssistantMessage: Codable {
+                            let id: String
+                            let role: String
+                            let content: [ContentBlock]
+                        }
+                        struct ContentBlock: Codable {
+                            let type: String
+                            let text: ContentText?
+                        }
+                        struct ContentText: Codable {
+                            let value: String
+                            let annotations: [String]?
+                        }
+                        
+                        let msgsRes = try JSONDecoder().decode(ThreadMessagesResponse.self, from: msgsData)
+                        if let lastMsg = msgsRes.data.last, lastMsg.role == "assistant" {
+                            let combinedText = lastMsg.content.compactMap { $0.text?.value }.joined(separator: "\n\n")
+                            assistantReply = combinedText.trimmingCharacters(in: .whitespacesAndNewlines)
                         }
                     } catch {
-                        // If we can't decode a chunk, just ignore or log
-                        print("Chunk decoding error: \(error.localizedDescription)")
+                        print("Error decoding thread messages:", error)
+                    }
+                    if assistantReply != nil {
+                        break
                     }
                 }
+            } catch {
+                print("Error polling run status:", error)
             }
+        }
+        
+        guard let reply = assistantReply, !reply.isEmpty else {
+            throw URLError(.timedOut)
+        }
+        return reply
+    }
+    
+    private func logResponse(_ data: Data, _ response: URLResponse) {
+        if let httpRes = response as? HTTPURLResponse {
+            print("Status code: \(httpRes.statusCode)")
+            let body = String(data: data, encoding: .utf8) ?? "<no body>"
+            print("Response body: \(body)")
         }
     }
     
-    func urlSession(_ session: URLSession,
-                    task: URLSessionTask,
-                    didCompleteWithError error: Error?) {
-        onFinished?(error)
+    private func handleQuickReply(_ reply: String) {
+        chatText = reply
+        sendMessage()
+    }
+    
+    private func randomizePrompts() {
+        let shuffled = masterPrompts.shuffled()
+        quickReplies = Array(shuffled.prefix(4))
+    }
+    
+    private func clearActiveConversation() {
+        guard let activeID = activeConversationID,
+              let index = conversations.firstIndex(where: { $0.id == activeID }) else { return }
+        var convo = conversations[index]
+        convo.messages.removeAll()
+        conversations[index] = convo
+        saveConversations()
+    }
+    
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        if let lastID = currentMessages.last?.id {
+            proxy.scrollTo(lastID, anchor: .bottom)
+        }
     }
 }
 
-// The structure that matches the streaming JSON chunk
-struct StreamingChunk: Decodable {
-    let id: String?
-    let object: String?
-    let choices: [Choice]
-}
-
-struct Choice: Decodable {
-    let delta: Delta
-    let finish_reason: String?
-}
-
-struct Delta: Decodable {
-    let content: String?
-    let role: String?
-}
-
-// MARK: - Data Persistence
+// MARK: - Persistence
 extension AITabView {
     private func saveConversations() {
         do {
@@ -498,7 +579,7 @@ extension AITabView {
 // MARK: - ChatBubble
 struct ChatBubble: View {
     let message: ChatMessage
-    @State private var showTimestamp = false
+    @State private var showTimestamp: Bool = false
     
     var body: some View {
         HStack(alignment: .top) {
@@ -526,9 +607,7 @@ struct ChatBubble: View {
     }
     
     private var userView: some View {
-        let bubbleColor: Color = message.isError
-            ? Color.red.opacity(0.8)
-            : Color.yellow.opacity(0.8)
+        let bubbleColor: Color = message.isError ? Color.red.opacity(0.8) : Color.yellow.opacity(0.8)
         let textColor: Color = message.isError ? .white : .black
         
         return VStack(alignment: .trailing, spacing: 4) {
@@ -545,9 +624,7 @@ struct ChatBubble: View {
         .background(bubbleColor)
         .cornerRadius(16)
         .shadow(color: .black.opacity(0.1), radius: 2, x: 0, y: 1)
-        .onLongPressGesture {
-            showTimestamp.toggle()
-        }
+        .onLongPressGesture { showTimestamp.toggle() }
     }
     
     private func formattedTime(_ date: Date) -> String {
